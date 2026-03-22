@@ -23,13 +23,43 @@ _EXTRACTION_TIMEOUT = "__EXTRACTION_TIMEOUT__"
 
 
 def _extract_pdf_worker(file_path: str, maxpages: int, result_queue):
-    """Worker: extract text from a PDF in a separate process."""
+    """Worker: extract text from a PDF in a separate process.
+
+    Uses a 3-strategy fallback chain:
+    1. pymupdf4llm - layout-aware markdown output, best for LLM/RAG
+    2. PyMuPDF (fitz) - fast plain text extraction
+    3. pdfminer - last resort for edge-case PDFs (unusual encodings, Type3 fonts)
+    """
+    text = ""
+
+    # Strategy 1: pymupdf4llm (layout-aware markdown, fast)
     try:
-        from pdfminer.high_level import extract_text
-        text = extract_text(file_path, maxpages=maxpages) or ""
-        result_queue.put(text)
+        import pymupdf4llm
+        pages = list(range(maxpages)) if maxpages else None
+        text = pymupdf4llm.to_markdown(file_path, pages=pages)
     except Exception:
-        result_queue.put("")
+        pass
+
+    # Strategy 2: PyMuPDF plain text (fast, robust)
+    if not text:
+        try:
+            import fitz
+            doc = fitz.open(file_path)
+            page_limit = min(maxpages, len(doc)) if maxpages else len(doc)
+            text = "\n".join(doc[i].get_text() for i in range(page_limit))
+            doc.close()
+        except Exception:
+            pass
+
+    # Strategy 3: pdfminer (last resort for rare encoding edge cases)
+    if not text:
+        try:
+            from pdfminer.high_level import extract_text
+            text = extract_text(file_path, maxpages=maxpages) or ""
+        except Exception:
+            pass
+
+    result_queue.put(text)
 
 
 @dataclass
