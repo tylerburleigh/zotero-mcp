@@ -247,6 +247,8 @@ class ZoteroSemanticSearch:
             "publication": data.get("publicationTitle", ""),
             "url": data.get("url", ""),
             "doi": data.get("DOI", ""),
+            "library_type": item.get("library_type", "user"),
+            "library_id": item.get("library_id", "0"),
         }
         # If local fulltext field exists, add markers so we can filter later
         if data.get("fulltext"):
@@ -518,13 +520,27 @@ class ZoteroSemanticSearch:
                         it.fulltext = None
                         it.fulltext_source = None
 
+                # Build libraryID → groupID mapping for multi-library support
+                library_group_map = reader.get_library_group_map()
+
                 # Convert to API-compatible format
                 api_items = []
                 for item in local_items:
+                    # Determine Zotero API library type and ID
+                    lib_id = getattr(item, 'library_id', None)
+                    if lib_id and lib_id in library_group_map:
+                        api_library_type = "group"
+                        api_library_id = str(library_group_map[lib_id])
+                    else:
+                        api_library_type = "user"
+                        api_library_id = "0"
+
                     # Create API-compatible item structure
                     api_item = {
                         "key": item.key,
                         "version": 0,  # Local items don't have versions
+                        "library_type": api_library_type,
+                        "library_id": api_library_id,
                         "data": {
                             "key": item.key,
                             "itemType": getattr(item, 'item_type', None) or "journalArticle",
@@ -878,6 +894,30 @@ class ZoteroSemanticSearch:
                 "error": str(e)
             }
 
+    def _get_client_for_library(self, library_type: str, library_id: str) -> Any:
+        """Get or create a Zotero client for the given library.
+
+        Caches clients per (library_type, library_id) to avoid recreating.
+        """
+        if not hasattr(self, '_library_clients'):
+            self._library_clients: dict[tuple[str, str], Any] = {}
+
+        cache_key = (library_type, library_id)
+
+        # Default client handles user/0
+        if library_type == "user" and library_id in ("0", ""):
+            return self.zotero_client
+
+        if cache_key not in self._library_clients:
+            from pyzotero import zotero as pyzotero_mod
+            self._library_clients[cache_key] = pyzotero_mod.Zotero(
+                library_id=library_id,
+                library_type=library_type,
+                local=True,
+            )
+
+        return self._library_clients[cache_key]
+
     def _enrich_search_results(self, chroma_results: dict[str, Any], query: str) -> list[dict[str, Any]]:
         """Enrich ChromaDB results with full Zotero item data."""
         enriched = []
@@ -892,8 +932,14 @@ class ZoteroSemanticSearch:
 
         for i, item_key in enumerate(ids):
             try:
+                # Use the correct client based on library metadata
+                meta = metadatas[i] if i < len(metadatas) else {}
+                lib_type = meta.get("library_type", "user")
+                lib_id = meta.get("library_id", "0")
+                client = self._get_client_for_library(lib_type, str(lib_id))
+
                 # Get full item data from Zotero
-                zotero_item = self.zotero_client.item(item_key)
+                zotero_item = client.item(item_key)
 
                 enriched_result = {
                     "item_key": item_key,

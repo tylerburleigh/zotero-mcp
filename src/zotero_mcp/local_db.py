@@ -90,6 +90,7 @@ class ZoteroItem:
     extra: str | None = None
     date_added: str | None = None
     date_modified: str | None = None
+    library_id: int | None = None
 
     def get_searchable_text(self) -> str:
         """
@@ -535,6 +536,7 @@ class LocalZoteroReader:
             i.itemID,
             i.key,
             i.itemTypeID,
+            i.libraryID,
             it.typeName as item_type,
             i.dateAdded,
             i.dateModified,
@@ -615,11 +617,23 @@ class LocalZoteroReader:
                 notes=row['notes'],
                 extra=row['extra'],
                 date_added=row['dateAdded'],
-                date_modified=row['dateModified']
+                date_modified=row['dateModified'],
+                library_id=row['libraryID']
             )
             items.append(item)
 
         return items
+
+    def get_library_group_map(self) -> dict[int, int]:
+        """Map SQLite libraryID → Zotero API groupID.
+
+        Returns a dict where keys are libraryIDs from the items table and
+        values are the corresponding groupIDs for group libraries.
+        libraryID=1 (personal library) is not included.
+        """
+        conn = self._get_connection()
+        rows = conn.execute("SELECT groupID, libraryID FROM groups").fetchall()
+        return {row['libraryID']: row['groupID'] for row in rows}
 
     # Public helper to quickly check full text metadata for item
     def get_fulltext_meta_for_item(self, item_id: int) -> tuple[str, str] | None:
