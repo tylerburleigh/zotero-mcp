@@ -280,7 +280,15 @@ class LocalZoteroReader:
                 args=(str(file_path), maxpages, result_queue),
             )
             process.start()
-            process.join(timeout=timeout)
+
+            # Read from queue BEFORE joining — large results can fill the
+            # pipe buffer, preventing the child from exiting (deadlock).
+            try:
+                text = result_queue.get(timeout=timeout)
+            except Exception:
+                text = None
+
+            process.join(timeout=5)
 
             if process.is_alive():
                 logger.warning(f"PDF extraction timed out after {timeout}s: {file_path.name}")
@@ -288,9 +296,7 @@ class LocalZoteroReader:
                 process.join(timeout=5)
                 return _EXTRACTION_TIMEOUT
 
-            if not result_queue.empty():
-                return result_queue.get_nowait()
-            return ""
+            return text if text else ""
         except Exception as e:
             logger.warning(f"PDF extraction failed: {file_path.name}: {e}")
             return ""
