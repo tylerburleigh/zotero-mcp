@@ -32,6 +32,13 @@ def _extract_pdf_worker(file_path: str, maxpages: int, result_queue):
     """
     text = ""
 
+    # Suppress MuPDF C library warnings (e.g. broken color profiles)
+    import os
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    old_stderr = os.dup(2)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+
     # Strategy 1: pymupdf4llm (layout-aware markdown, fast)
     try:
         import pymupdf4llm
@@ -58,6 +65,10 @@ def _extract_pdf_worker(file_path: str, maxpages: int, result_queue):
             text = extract_text(file_path, maxpages=maxpages) or ""
         except Exception:
             pass
+
+    # Restore stderr
+    os.dup2(old_stderr, 2)
+    os.close(old_stderr)
 
     result_queue.put(text)
 
